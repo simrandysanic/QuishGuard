@@ -11,60 +11,17 @@ M.Tech Thesis — IIT Ropar, 2026
 
 ## Overview
 
-QuishGuard is a 3-stage multimodal framework for detecting **quishing attacks** — phishing delivered via QR codes. It achieves **99.54% accuracy** and **AUC 99.90%** on a 98,509-sample holdout test set.
+QuishGuard is a 3-stage multimodal framework for detecting **quishing attacks** — phishing delivered via QR codes.
 
 ### The Problem
 
-Visual-only QR classifiers trained on clean datasets fail on real-world images, dropping from **99.19% → 84.80%** accuracy. This failure stems from QR code determinism: the same URL always generates the same code, so appearance alone is not enough. QuishGuard solves this by combining visual evidence with URL-semantic evidence.
+Visual-only QR classifiers trained on clean datasets fail on real-world images. This failure stems from QR code determinism: the same URL always generates the same code, so appearance alone is not enough. QuishGuard solves this by combining visual evidence with URL-semantic evidence.
 
----
+### How It Works
 
-## Architecture
-
-```
-         QR Code Image
-               │
-    ┌──────────▼──────────┐
-    │   Stage 0: Visual   │       ┌──────────────────────┐
-    │ MobileNetV2 (1280-d)│       │   QR Decode Failure? │
-    │ ShuffleNetV2(1024-d)│       │   → C₁ = 0.0         │
-    │ Concat → 2000-d     │       │   (treat as phishing) │
-    │ HHO (313 features)  │       └──────────┬───────────┘
-    │ Quadratic SVM       │                  │
-    └────────┬────────────┘    ┌─────────────▼──────────┐
-             │  C₀ score       │   Stage 1: Semantic     │
-             │                 │ BERT-base-cased on URL   │
-             │                 │ → C₁ score               │
-             └────────┬────────┘
-                      │
-           ┌──────────▼──────────┐
-           │  Stage 2: Fusion    │
-           │ Logistic Regression │
-           │ β₀=6.49, β₁=12.57  │
-           │ threshold τ = 0.94  │
-           └──────────┬──────────┘
-                      │
-               Phishing / Benign
-```
-
----
-
-## Key Results
-
-| Component | Accuracy | AUC |
-|---|---|---|
-| Stage 0 — visual SVM (HHO) | 93.98% | 97.77% |
-| Stage 0 — end-to-end visual only | 96.38% | 98.91% |
-| Stage 1 — BERT URL classifier | 99.54% | 99.93% |
-| **QuishGuard — full fusion** | **99.54%** | **99.90%** |
-| Wild-test visual-only baseline | 84.80% | — |
-
-**Confusion matrix (test set, 98,509 samples):**
-
-|  | Predicted Benign | Predicted Phishing |
-|---|---|---|
-| **Actual Benign** | TN = 49,521 | FP = 478 |
-| **Actual Phishing** | FN = 645 | TP = 47,865 |
+1. **Stage 0 — Visual:** MobileNetV2 + ShuffleNetV2 features → HHO feature selection → quadratic SVM → confidence score C₀
+2. **Stage 1 — Semantic:** BERT-base-cased on the decoded URL → confidence score C₁. If the QR code cannot be decoded, C₁ = 0 (treated as phishing).
+3. **Stage 2 — Fusion:** Logistic regression over C₀ and C₁ → final phishing/benign prediction.
 
 ---
 
