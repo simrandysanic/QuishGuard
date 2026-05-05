@@ -1,0 +1,36 @@
+{
+  "sample_fraction": 0.25,
+  "random_seed": 42,
+  "penalty_score": 0.0,
+  "decode_failures": 2859,
+  "total_samples": 100000,
+  "learned_fusion_threshold": 0.9400000000000006,
+  "stage0": {
+    "accuracy": 0.96391,
+    "precision": 0.9618012792499305,
+    "recall": 0.9663506636064265,
+    "f1": 0.9640706043983394,
+    "auc": 0.9891759736660439
+  },
+  "stage1_effective": {
+    "accuracy": 0.98147,
+    "precision": 0.9961747285291214,
+    "recall": 0.9667298672787147,
+    "f1": 0.981231451751765,
+    "auc": 0.9715800296679309
+  },
+  "fusion_default_0_5": {
+    "accuracy": 0.98149,
+    "precision": 0.9962157048249763,
+    "recall": 0.9667298672787147,
+    "f1": 0.981251329423562,
+    "auc": 0.9984779466877449
+  },
+  "fusion_learned_threshold": {
+    "accuracy": 0.98152,
+    "precision": 0.9963180088450067,
+    "recall": 0.9666899511026844,
+    "f1": 0.9812803889789303,
+    "auc": 0.9984779466877449
+  }
+}

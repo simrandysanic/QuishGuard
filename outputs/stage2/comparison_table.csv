@@ -1,0 +1,4 @@
+Stage,Accuracy,AUC
+MobileNetV2 + SVM  (C0),0.9362,0.9777
+BERT               (C1),0.99,0.9983
+Fusion C0 + C1,0.99,0.9975

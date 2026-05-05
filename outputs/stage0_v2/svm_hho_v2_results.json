@@ -1,0 +1,12 @@
+{
+  "n_features_hho": 313,
+  "best_C": 10.0,
+  "cv_acc": 0.9977,
+  "train_acc": 0.9974,
+  "train_auc": 0.9997,
+  "val_acc": 0.9401,
+  "val_auc": 0.9609,
+  "test_acc": 0.9398,
+  "test_auc": 0.96,
+  "paper_target_test_acc": 0.9589
+}

@@ -1,0 +1,14 @@
+{
+  "coef_C0": 4.416269745908621,
+  "coef_C1": 9.17270969974439,
+  "intercept": -6.521814735429385,
+  "threshold": 0.9300000000000006,
+  "c0_model": "svm_quadratic_hho_v2 (313 HHO features)",
+  "c0_test_acc": 0.9398,
+  "train_acc": 1.0,
+  "train_auc": 1.0,
+  "val_acc": 0.9901,
+  "val_auc": 0.9952,
+  "test_acc": 0.9886,
+  "test_auc": 0.9945
+}

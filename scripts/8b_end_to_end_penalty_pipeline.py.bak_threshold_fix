@@ -1,0 +1,362 @@
+"""
+8b_end_to_end_penalty_pipeline.py
+
+Penalty-aware end-to-end QuishGuard inference runner.
+
+This script follows the guide-requested decode-failure policy:
+
+- If QR decoding succeeds, use the real BERT malicious probability.
+- If QR decoding fails, force the effective BERT score to a benign prior.
+
+The current implementation uses the visible baseline image pipeline
+(MobileNet feature extractor + quadratic SVM) and a fusion model.
+It is intended as the first executable end-to-end penalty evaluation.
+"""
+
+from __future__ import annotations
+
+import os
+import pickle
+import random
+from dataclasses import dataclass
+from typing import Iterable
+
+import cv2
+import numpy as np
+import pandas as pd
+import torch
+import torch.nn as nn
+from PIL import Image
+from sklearn.metrics import accuracy_score, confusion_matrix, f1_score, precision_score, recall_score, roc_auc_score
+from torch.utils.data import DataLoader, Dataset
+from torchvision import models, transforms
+from transformers import BertForSequenceClassification, BertTokenizer
+
+
+@dataclass(frozen=True)
+class ResolvedPaths:
+    experiment_root: str
+    qr_root: str
+    fusion_model_path: str
+    mobilenet_path: str
+    svm_path: str
+    bert_dir: str
+    output_dir: str
+
+
+def expand(path: str) -> str:
+    return os.path.abspath(os.path.expanduser(path))
+
+
+def first_existing(paths: Iterable[str], label: str) -> str:
+    candidates = [expand(path) for path in paths]
+    for candidate in candidates:
+        if os.path.exists(candidate):
+            return candidate
+    raise FileNotFoundError(f"Could not resolve {label}. Checked: {candidates}")
+
+
+def resolve_paths() -> ResolvedPaths:
+    env_root = os.environ.get("QUISHGUARD_BASE")
+    root_candidates = [candidate for candidate in [env_root, "~/QuishGuard", "~/QuishGuard/scripts"] if candidate]
+    experiment_root = first_existing(root_candidates, "QuishGuard base directory")
+
+    qr_root = first_existing(
+        [
+            os.path.join(experiment_root, "data", "qr_images_v2"),
+            os.path.join(experiment_root, "data", "qr_images"),
+        ],
+        "QR image directory",
+    )
+    fusion_model_path = first_existing(
+        [
+            os.path.join(experiment_root, "outputs", "stage2_models_clean", "fusion_model_hho_clean.pkl"),
+            os.path.join(experiment_root, "models", "stage2", "fusion_model.pkl"),
+            os.path.join(experiment_root, "models", "stage2", "fusion_model_v2.pkl"),
+            os.path.join(experiment_root, "scripts", "models", "stage2", "fusion_model.pkl"),
+        ],
+        "fusion model",
+    )
+    mobilenet_path = first_existing(
+        [
+            os.path.join(experiment_root, "models", "stage0", "mobilenet_features.pth"),
+            os.path.join(experiment_root, "scripts", "models", "stage0", "mobilenet_features.pth"),
+        ],
+        "MobileNet feature extractor",
+    )
+    svm_path = first_existing(
+        [
+            os.path.join(experiment_root, "models", "stage0", "svm_quadratic.pkl"),
+            os.path.join(experiment_root, "scripts", "models", "stage0", "svm_quadratic.pkl"),
+        ],
+        "Stage 0 SVM",
+    )
+    bert_dir = first_existing(
+        [
+            os.path.join(experiment_root, "models", "stage1", "best"),
+            os.path.join(experiment_root, "scripts", "models", "stage1", "best"),
+        ],
+        "BERT checkpoint directory",
+    )
+    output_dir = expand(os.path.join(experiment_root, "outputs", "e2e_penalty"))
+    os.makedirs(output_dir, exist_ok=True)
+
+    return ResolvedPaths(
+        experiment_root=expand(experiment_root),
+        qr_root=qr_root,
+        fusion_model_path=fusion_model_path,
+        mobilenet_path=mobilenet_path,
+        svm_path=svm_path,
+        bert_dir=bert_dir,
+        output_dir=output_dir,
+    )
+
+
+class MobileNetV2FeatureExtractor(nn.Module):
+    def __init__(self) -> None:
+        super().__init__()
+        mobilenet = models.mobilenet_v2(pretrained=False)
+        self.features = mobilenet.features
+        self.avgpool = nn.AdaptiveAvgPool2d(1)
+        self.feature_layer = nn.Linear(1280, 1000)
+        self.relu = nn.ReLU(inplace=True)
+
+    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
+        outputs = self.features(inputs)
+        outputs = self.avgpool(outputs)
+        outputs = torch.flatten(outputs, 1)
+        outputs = self.feature_layer(outputs)
+        outputs = self.relu(outputs)
+        return outputs
+
+
+class ImagePathDataset(Dataset):
+    def __init__(self, paths: list[str], transform):
+        self.paths = paths
+        self.transform = transform
+
+    def __len__(self) -> int:
+        return len(self.paths)
+
+    def __getitem__(self, index: int):
+        path = self.paths[index]
+        try:
+            image = Image.open(path).convert("RGB")
+            return self.transform(image), index, True
+        except Exception:
+            return torch.zeros(3, 224, 224), index, False
+
+
+class URLListDataset(Dataset):
+    def __init__(self, urls: list[str], tokenizer, max_length: int):
+        self.urls = urls
+        self.tokenizer = tokenizer
+        self.max_length = max_length
+
+    def __len__(self) -> int:
+        return len(self.urls)
+
+    def __getitem__(self, index: int):
+        encoding = self.tokenizer(
+            self.urls[index],
+            add_special_tokens=True,
+            max_length=self.max_length,
+            padding="max_length",
+            truncation=True,
+            return_tensors="pt",
+        )
+        return {
+            "input_ids": encoding["input_ids"].flatten(),
+            "attention_mask": encoding["attention_mask"].flatten(),
+            "token_type_ids": encoding["token_type_ids"].flatten(),
+        }
+
+
+def decode_qr(path: str) -> str:
+    image = cv2.imread(path)
+    if image is None:
+        return ""
+    detector = cv2.QRCodeDetector()
+    data, _, _ = detector.detectAndDecode(image)
+    return data if data else ""
+
+
+def build_sample_frame(qr_root: str, sample_fraction: float, random_seed: int) -> pd.DataFrame:
+    rows: list[dict[str, object]] = []
+    for split in ["train", "val", "test"]:
+        manifest_path = os.path.join(qr_root, f"{split}_manifest.csv")
+        if not os.path.exists(manifest_path):
+            continue
+        frame = pd.read_csv(manifest_path)
+        for _, row in frame.iterrows():
+            full_path = os.path.join(qr_root, str(row["img_path"]))
+            if os.path.exists(full_path):
+                rows.append(
+                    {
+                        "img_path": full_path,
+                        "true_label": int(row["label"]),
+                        "true_url": str(row["url"]).strip(),
+                        "split": split,
+                    }
+                )
+
+    all_rows = pd.DataFrame(rows)
+    sample_size = max(1, int(len(all_rows) * sample_fraction))
+    return all_rows.sample(n=sample_size, random_state=random_seed).reset_index(drop=True)
+
+
+def extract_c0_scores(paths: list[str], model: nn.Module, svm, device: str) -> np.ndarray:
+    transform = transforms.Compose(
+        [
+            transforms.Resize((224, 224)),
+            transforms.ToTensor(),
+            transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+        ]
+    )
+    dataset = ImagePathDataset(paths, transform)
+    loader = DataLoader(dataset, batch_size=256, shuffle=False, num_workers=0)
+    features = np.zeros((len(paths), 1000), dtype=np.float32)
+
+    with torch.no_grad():
+        for tensors, indices, valid_flags in loader:
+            tensors = tensors.to(device)
+            batch_features = model(tensors).cpu().numpy()
+            for batch_index, (sample_index, is_valid) in enumerate(zip(indices.numpy(), valid_flags.numpy())):
+                if is_valid:
+                    features[sample_index] = batch_features[batch_index]
+
+    probabilities = svm.predict_proba(features)
+    malicious_index = list(svm.classes_).index(1)
+    return probabilities[:, malicious_index]
+
+
+def extract_c1_scores(urls: list[str], tokenizer, bert_model, device: str) -> np.ndarray:
+    dataset = URLListDataset(urls, tokenizer, 128)
+    loader = DataLoader(dataset, batch_size=64, shuffle=False, num_workers=0)
+    scores: list[float] = []
+
+    with torch.no_grad():
+        for batch in loader:
+            outputs = bert_model(
+                input_ids=batch["input_ids"].to(device),
+                attention_mask=batch["attention_mask"].to(device),
+                token_type_ids=batch["token_type_ids"].to(device),
+            )
+            probs = torch.softmax(outputs.logits, dim=1)
+            scores.extend(probs[:, 1].cpu().numpy().tolist())
+
+    return np.array(scores, dtype=np.float32)
+
+
+def print_metrics(y_true: np.ndarray, y_pred: np.ndarray, y_prob: np.ndarray, title: str) -> dict[str, float]:
+    metrics = {
+        "accuracy": float(accuracy_score(y_true, y_pred)),
+        "precision": float(precision_score(y_true, y_pred, zero_division=0)),
+        "recall": float(recall_score(y_true, y_pred, zero_division=0)),
+        "f1": float(f1_score(y_true, y_pred, zero_division=0)),
+        "auc": float(roc_auc_score(y_true, y_prob)),
+    }
+    tn, fp, fn, tp = confusion_matrix(y_true, y_pred).ravel()
+    print(f"\n{title}")
+    print(f"  Accuracy  : {metrics['accuracy']:.4f}")
+    print(f"  Precision : {metrics['precision']:.4f}")
+    print(f"  Recall    : {metrics['recall']:.4f}")
+    print(f"  F1        : {metrics['f1']:.4f}")
+    print(f"  AUC       : {metrics['auc']:.4f}")
+    print(f"  TN={tn:,} FP={fp:,} FN={fn:,} TP={tp:,}")
+    return metrics
+
+
+def main() -> None:
+    sample_fraction = float(os.environ.get("QUISHGUARD_E2E_SAMPLE_FRACTION", "0.25"))
+    random_seed = int(os.environ.get("QUISHGUARD_E2E_RANDOM_SEED", "42"))
+    penalty_score = float(os.environ.get("QUISHGUARD_BERT_PENALTY_SCORE", "0.0"))
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    random.seed(random_seed)
+    np.random.seed(random_seed)
+
+    paths = resolve_paths()
+    print("=" * 60)
+    print("PENALTY-AWARE END-TO-END PIPELINE")
+    print("=" * 60)
+    print(f"Experiment root : {paths.experiment_root}")
+    print(f"QR root         : {paths.qr_root}")
+    print(f"Fusion model    : {paths.fusion_model_path}")
+    print(f"Penalty score   : {penalty_score:.2f}")
+    print(f"Sample fraction : {sample_fraction:.2f}")
+    print(f"Device          : {device}")
+
+    frame = build_sample_frame(paths.qr_root, sample_fraction, random_seed)
+    print(f"\nSampled rows: {len(frame):,}")
+
+    frame["decoded_url"] = [decode_qr(path) for path in frame["img_path"].tolist()]
+    frame["decode_success"] = (frame["decoded_url"] != "").astype(int)
+    decode_failures = int((frame["decode_success"] == 0).sum())
+    print(f"Decode failures: {decode_failures:,} / {len(frame):,}")
+
+    cnn_model = MobileNetV2FeatureExtractor()
+    cnn_state = torch.load(paths.mobilenet_path, map_location=device)
+    filtered_state = {key: value for key, value in cnn_state.items() if not key.startswith("classifier")}
+    cnn_model.load_state_dict(filtered_state, strict=False)
+    cnn_model.to(device)
+    cnn_model.eval()
+
+    with open(paths.svm_path, "rb") as handle:
+        svm = pickle.load(handle)
+    with open(paths.fusion_model_path, "rb") as handle:
+        fusion = pickle.load(handle)
+
+    tokenizer = BertTokenizer.from_pretrained(paths.bert_dir)
+    bert_model = BertForSequenceClassification.from_pretrained(paths.bert_dir)
+    bert_model = bert_model.to(device)
+    bert_model.eval()
+
+    frame["C0"] = extract_c0_scores(frame["img_path"].tolist(), cnn_model, svm, device)
+
+    successful_rows = frame["decode_success"] == 1
+    real_c1 = np.full(len(frame), penalty_score, dtype=np.float32)
+    if int(successful_rows.sum()) > 0:
+        real_c1[successful_rows.values] = extract_c1_scores(
+            frame.loc[successful_rows, "decoded_url"].tolist(),
+            tokenizer,
+            bert_model,
+            device,
+        )
+
+    frame["C1_effective"] = real_c1
+    fusion_features = frame[["C0", "C1_effective"]].values
+    frame["fusion_score"] = fusion.predict_proba(fusion_features)[:, 1]
+    frame["fusion_pred"] = fusion.predict(fusion_features)
+
+    labels = frame["true_label"].values
+    c0_pred = (frame["C0"].values >= 0.5).astype(int)
+    c1_pred = (frame["C1_effective"].values >= 0.5).astype(int)
+
+    c0_metrics = print_metrics(labels, c0_pred, frame["C0"].values, "Stage 0 only")
+    c1_metrics = print_metrics(labels, c1_pred, frame["C1_effective"].values, "Stage 1 effective")
+    fusion_metrics = print_metrics(labels, frame["fusion_pred"].values, frame["fusion_score"].values, "Penalty-aware fusion")
+
+    results_path = os.path.join(paths.output_dir, "results_penalty.csv")
+    summary_path = os.path.join(paths.output_dir, "summary_penalty.json")
+    frame.to_csv(results_path, index=False)
+    with open(summary_path, "w", encoding="utf-8") as handle:
+        pickle_safe = {
+            "sample_fraction": sample_fraction,
+            "random_seed": random_seed,
+            "penalty_score": penalty_score,
+            "decode_failures": decode_failures,
+            "total_samples": int(len(frame)),
+            "stage0": c0_metrics,
+            "stage1_effective": c1_metrics,
+            "fusion": fusion_metrics,
+        }
+        import json
+
+        json.dump(pickle_safe, handle, indent=2)
+
+    print(f"\nSaved results : {results_path}")
+    print(f"Saved summary : {summary_path}")
+
+
+if __name__ == "__main__":
+    main()

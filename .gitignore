@@ -1,0 +1,52 @@
+# QR image datasets (huge: 4.2G + 1.7G)
+data/qr_images/
+data/qr_images_v2/
+
+# BERT checkpoints (414MB each x11 = ~4.5GB)
+models/stage1/epoch_*/pytorch_model.bin
+models/stage1/best/pytorch_model.bin
+
+# Large raw feature arrays (up to 916MB each)
+outputs/stage0_v2/train_features_1000d.npy
+outputs/stage0_v2/val_features_1000d.npy
+outputs/stage0_v2/test_features_1000d.npy
+outputs/stage0_v2/train_shufflenet_features_1000d.npy
+outputs/stage0_v2/val_shufflenet_features_1000d.npy
+outputs/stage0_v2/test_shufflenet_features_1000d.npy
+outputs/stage0_v2/hho_v2_reduced_train.npy
+outputs/stage0_v2/hho_v2_reduced_val.npy
+outputs/stage0_v2/hho_v2_reduced_test.npy
+outputs/stage0/train_features_1000d.npy
+outputs/stage0/val_features_1000d.npy
+outputs/stage0/test_features_1000d.npy
+
+# Large intermediate result CSVs
+outputs/stage2_clean/
+
+# Python cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+*.egg-info/
+dist/
+build/
+.pytest_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Env
+.env
+*.env

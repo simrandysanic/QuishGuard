@@ -1,0 +1,10 @@
+{
+  "best_C": 0.01,
+  "best_threshold": 0.27,
+  "coef_C0": 3.933298331071881,
+  "coef_C1": 5.73903914888139,
+  "intercept": -4.899242361815873,
+  "train_size": 115695,
+  "val_size": 29487,
+  "test_size": 48936
+}

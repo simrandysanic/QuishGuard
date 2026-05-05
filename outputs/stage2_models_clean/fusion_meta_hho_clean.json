@@ -1,0 +1,33 @@
+{
+  "protocol": "train_only_fit__val_only_threshold__single_test_eval",
+  "experiment_root": "/home/simran/QuishGuard",
+  "coef_C0": 6.489730029591912,
+  "coef_C1": 12.569946770580584,
+  "intercept": -9.343491715523577,
+  "threshold": 0.9400000000000006,
+  "c0_model": "svm_quadratic_hho_v2 (313 HHO features)",
+  "train_acc": 1.0,
+  "train_auc": 1.0,
+  "val_acc": 0.99,
+  "val_auc": 0.9952,
+  "test_acc": 0.9886,
+  "test_auc": 0.9945,
+  "train_confusion": {
+    "tn": 119995,
+    "fp": 2,
+    "fn": 3,
+    "tp": 115419
+  },
+  "val_confusion": {
+    "tn": 29755,
+    "fp": 245,
+    "fn": 348,
+    "tp": 28971
+  },
+  "test_confusion": {
+    "tn": 49521,
+    "fp": 478,
+    "fn": 645,
+    "tp": 47865
+  }
+}

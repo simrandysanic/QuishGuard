@@ -1,0 +1,11 @@
+END-TO-END TEST SUMMARY
+==================================================
+Sample fraction : 0.25
+Samples total   : 97,141
+Decode failures : 2859  (2.9%)
+URL match rate  : 97.14%
+
+                                Stage  Accuracy    AUC     F1
+   MobileNetV2 + SVM  (QR image only)    0.9638 0.9891 0.9640
+BERT               (decoded URL only)    0.9954 0.9993 0.9954
+     Fusion             (image + URL)    0.9954 0.9990 0.9954

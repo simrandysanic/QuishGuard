@@ -1,0 +1,28 @@
+{
+  "best_C": 0.05,
+  "best_threshold": 0.88,
+  "coef_C0": 10.292183589845656,
+  "coef_C1": -0.0178472216978074,
+  "intercept": -5.5736455222405965,
+  "train_size": 235419,
+  "val_size": 59319,
+  "test_size": 98509,
+  "val_metrics": {
+    "acc": 0.9326522699303764,
+    "prec": 0.9436269357438162,
+    "rec": 0.9186193253521607,
+    "f1": 0.930955220269266,
+    "auc": 0.9689132849005764
+  },
+  "test_metrics": {
+    "acc": 0.931244860875656,
+    "prec": 0.9421573405089306,
+    "rec": 0.9166563595135023,
+    "f1": 0.929231926609339,
+    "auc": 0.9691351151286065
+  },
+  "input_files": {
+    "c0": "outputs/stage0/{split}_with_C0_fusion_v2.csv",
+    "c1": "outputs/stage1/features/{split}_with_C1_fusion_v2.csv"
+  }
+}
